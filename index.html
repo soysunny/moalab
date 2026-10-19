@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>모아랩 스티커 감지기</title>
+    <!-- TensorFlow.js 및 Teachable Machine 라이브러리 -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text: #0f172a;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        header h1 {
+            font-size: 1.6rem;
+            color: var(--primary);
+            margin-bottom: 6px;
+        }
+
+        header p {
+            font-size: 0.9rem;
+            color: #64748b;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 440px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .viewfinder {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #1e293b;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Teachable Machine 캔버스 및 미디어 스타일 */
+        #webcam-container canvas, #uploaded-image {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover;
+        }
+
+        #uploaded-image {
+            display: none;
+        }
+
+        .guide-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 70%;
+            height: 70%;
+            border: 3px dashed rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            pointer-events: none;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+        }
+
+        .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            width: 100%;
+            margin-top: 16px;
+        }
+
+        button, label.btn-file {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            text-align: center;
+            display: inline-block;
+            transition: opacity 0.2s;
+        }
+
+        button:active, label.btn-file:active {
+            opacity: 0.8;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        /* 결과 표시 카드 */
+        .result-card {
+            width: 100%;
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08);
+            text-align: center;
+        }
+
+        .result-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #334155;
+        }
+
+        .result-msg {
+            font-size: 1rem;
+            line-height: 1.5;
+            word-break: keep-all;
+            padding: 14px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .safe {
+            background: #dcfce7;
+            color: #15803d;
+        }
+
+        .warn {
+            background: #fee2e2;
+            color: #b91c1c;
+        }
+
+        .unknown {
+            background: #f1f5f9;
+            color: #475569;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>🛡️ 모아랩 스티커 감지기</h1>
+        <p>스티커를 중앙 원 안에 맞추어 촬영하세요.</p>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <div class="viewfinder">
+                <div id="webcam-container"></div>
+                <img id="uploaded-image" alt="업로드 이미지">
+                <div class="guide-overlay"></div>
+            </div>
+
+            <div class="btn-group">
+                <button id="start-btn" onclick="startApp()">📷 카메라 실행</button>
+                <label for="file-input" class="btn-file">📁 파일 선택</label>
+                <input type="file" id="file-input" accept="image/*">
+            </div>
+        </div>
+
+        <div class="result-card">
+            <div class="result-title">감지 결과</div>
+            <div id="result-msg" class="result-msg unknown">
+                카메라를 실행하거나 이미지를 업로드해 주세요.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 학습시킨 Teachable Machine 모델 URL
+        const MODEL_URL = "https://teachablemachine.withgoogle.com/models/w_BWRGbW6/";
+
+        // 클래스별 문구 정의
+        const STICKER_MESSAGES = {
+            "TIME_BEFORE": {
+                name: "타임가드(전)",
+                msg: "아직 유효기간이 지나지 않았습니다. 안심하고 계속 사용하세요!",
+                type: "safe"
+            },
+            "TIME_AFTER": {
+                name: "타임가드(후)",
+                msg: "유효기간이 지났습니다. 빠른 시일 내에 교체해주세요!",
+                type: "warn"
+            },
+            "WATER_BEFORE": {
+                name: "워터가드(전)",
+                msg: "식수가 깨끗합니다. 안심하고 마시세요!",
+                type: "safe"
+            },
+            "WATER_AFTER": {
+                name: "워터가드(후)",
+                msg: "식수가 오염됐습니다. 마시지 마세요!",
+                type: "warn"
+            },
+            "FRESH_BEFORE": {
+                name: "프레시가드(전)",
+                msg: "식품이 아직 신선합니다. 안심하고 드세요!",
+                type: "safe"
+            },
+            "FRESH_AFTER": {
+                name: "프레시가드(후)",
+                msg: "식품이 부패했습니다. 드시지 마세요!",
+                type: "warn"
+            }
+        };
+
+        let model, webcam, maxPredictions;
+        let isModelLoaded = false;
+        let isCameraActive = false;
+
+        // AI 모델 불러오기
+        async function loadModel() {
+            if (isModelLoaded) return;
+            const resultMsg = document.getElementById("result-msg");
+            resultMsg.innerText = "AI 비전 모델을 로딩 중입니다...";
+            resultMsg.className = "result-msg unknown";
+
+            try {
+                const modelURL = MODEL_URL + "model.json";
+                const metadataURL = MODEL_URL + "metadata.json";
+
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+                isModelLoaded = true;
+                resultMsg.innerText = "모델 로딩 완료! 카메라를 보거나 파일을 올리세요.";
+            } catch (err) {
+                console.error("모델 로딩 실패:", err);
+                resultMsg.innerText = "모델을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.";
+            }
+        }
+
+        // 카메라 시작
+        async function startApp() {
+            await loadModel();
+
+            const uploadedImg = document.getElementById("uploaded-image");
+            uploadedImg.style.display = "none";
+
+            if (!webcam) {
+                webcam = new tmImage.Webcam(300, 300, true);
+                await webcam.setup();
+                await webcam.play();
+                document.getElementById("webcam-container").appendChild(webcam.canvas);
+                window.requestAnimationFrame(loop);
+            } else {
+                await webcam.play();
+            }
+
+            isCameraActive = true;
+            document.getElementById("start-btn").innerText = "📸 실시간 감지 중";
+        }
+
+        // 실시간 카메라 프레임 추론 루프
+        async function loop() {
+            if (isCameraActive && webcam) {
+                webcam.update();
+                await predict(webcam.canvas);
+                window.requestAnimationFrame(loop);
+            }
+        }
+
+        // 이미지 파일 업로드 처리
+        document.getElementById("file-input").addEventListener("change", async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            await loadModel();
+
+            if (webcam && isCameraActive) {
+                webcam.pause();
+                isCameraActive = false;
+                document.getElementById("start-btn").innerText = "📷 카메라 다시 시작";
+            }
+
+            const uploadedImg = document.getElementById("uploaded-image");
+            const reader = new FileReader();
+
+            reader.onload = function(evt) {
+                uploadedImg.src = evt.target.result;
+                uploadedImg.style.display = "block";
+                
+                uploadedImg.onload = async () => {
+                    await predict(uploadedImg);
+                };
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // 스티커 판단 함수
+        async function predict(imageElement) {
+            if (!isModelLoaded) return;
+
+            const prediction = await model.predict(imageElement);
+            let bestClass = null;
+            let maxProb = 0;
+
+            for (let i = 0; i < maxPredictions; i++) {
+                if (prediction[i].probability > maxProb) {
+                    maxProb = prediction[i].probability;
+                    bestClass = prediction[i].className;
+                }
+            }
+
+            const resultMsg = document.getElementById("result-msg");
+
+            // 확신도(Probability) 기준 75% 이상일 때만 판별
+            if (maxProb >= 0.75 && STICKER_MESSAGES[bestClass]) {
+                const info = STICKER_MESSAGES[bestClass];
+                resultMsg.innerText = `${info.name} : ${info.msg}`;
+                resultMsg.className = `result-msg ${info.type}`;
+            } else {
+                resultMsg.innerText = "여섯 가지 스티커에 해당하지 않습니다. 다시 촬영해 주세요.";
+                resultMsg.className = "result-msg unknown";
+            }
+        }
+    </script>
+</body>
+</html>
