@@ -267,7 +267,7 @@
             }
         }
 
-        // 카메라 시작
+        // 카메라 시작 (후면 카메라 전용으로 수정)
         async function startApp() {
             await loadModel();
 
@@ -275,8 +275,10 @@
             uploadedImg.style.display = "none";
 
             if (!webcam) {
-                webcam = new tmImage.Webcam(300, 300, true);
-                await webcam.setup();
+                // 후면 카메라 사용 시 좌우 반전(flip)을 끕니다 (false)
+                webcam = new tmImage.Webcam(300, 300, false);
+                // facingMode: "environment"를 통해 후면 카메라 지정
+                await webcam.setup({ facingMode: "environment" });
                 await webcam.play();
                 document.getElementById("webcam-container").appendChild(webcam.canvas);
                 window.requestAnimationFrame(loop);
